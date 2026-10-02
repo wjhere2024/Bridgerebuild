@@ -46,7 +46,10 @@ describe('restored Claude settings and provider registry', () => {
     expect(await store.current()).toEqual({ key: 'beta', model: 'Vendor/NewModel' });
     const name = (await readFile(join(dir, '.settings-profile'), 'utf8')).trim();
     expect(JSON.parse(await readFile(join(dir, 'settings-profiles', `${name}.json`), 'utf8'))).toEqual(active);
-    for (const file of ['settings.json', 'model-registry.json', '.settings-profile']) expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
+    // Windows reports read/write flags, not POSIX owner/group permission bits.
+    if (process.platform !== 'win32') {
+      for (const file of ['settings.json', 'model-registry.json', '.settings-profile']) expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
+    }
     expect(await readdir(join(dir, 'model-backups'))).toHaveLength(1);
   });
 

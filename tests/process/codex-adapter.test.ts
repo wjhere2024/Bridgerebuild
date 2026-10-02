@@ -340,6 +340,7 @@ describe('CodexAdapter process contract', () => {
 
     expect(await collect(run.events)).toEqual([
       { type: 'system', threadId: 'thread-retry' },
+      { type: 'notice', message: 'Reconnecting... 2/5 (timeout waiting for child process to exit)' },
       { type: 'final_text', content: 'after retry' },
       { type: 'done', threadId: 'thread-retry', terminationReason: 'normal' },
     ]);

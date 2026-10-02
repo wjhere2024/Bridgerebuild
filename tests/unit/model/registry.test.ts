@@ -50,7 +50,10 @@ describe('restored Codex registry', () => {
     });
     expect(JSON.parse(await readFile(join(dir, 'auth.json'), 'utf8'))).toEqual({ OPENAI_API_KEY: 'fixture-new-key' });
     expect((await store.read()).current).toEqual({ key: 'beta', model: 'Vendor/NewModel' });
-    for (const name of ['config.toml', 'auth.json', 'model-registry.json']) expect((await stat(join(dir, name))).mode & 0o777).toBe(0o600);
+    // Windows reports read/write flags, not POSIX owner/group permission bits.
+    if (process.platform !== 'win32') {
+      for (const name of ['config.toml', 'auth.json', 'model-registry.json']) expect((await stat(join(dir, name))).mode & 0o777).toBe(0o600);
+    }
     const backups = await readdir(join(dir, 'model-backups'));
     expect(await readFile(join(dir, 'model-backups', backups[0]!, 'config.toml'), 'utf8')).toBe(config);
   });
