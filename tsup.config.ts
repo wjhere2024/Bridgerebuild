@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig([
   {
-    entry: { cli: 'src/cli/index.ts', 'claude-settings': 'src/cli/claude-settings.ts' },
+    entry: { cli: 'src/cli/index.ts', 'claude-settings': 'src/cli/claude-settings.ts', 'codebuddy-probe': 'src/cli/codebuddy-probe.ts' },
     outDir: 'dist',
     format: ['esm'],
     target: 'node20',

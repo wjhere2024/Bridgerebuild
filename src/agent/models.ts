@@ -1,4 +1,5 @@
 import type { AgentKind } from '../config/profile-schema';
+import { codeBuddyModels, rememberCodeBuddyModel, validCodeBuddyModelId } from './codebuddy/models';
 
 /**
  * Sentinel selection meaning "don't pass `--model`; let the agent CLI /
@@ -45,6 +46,10 @@ const CODEX_MODELS: ModelOption[] = [
 
 /** The model picker options for a profile's agent kind. */
 export function supportedModels(agentKind: AgentKind): ModelOption[] {
+  if (agentKind === 'codebuddy') return [
+    { value: DEFAULT_MODEL, label: '跟随 WorkBuddy 默认模型' },
+    ...codeBuddyModels().map((model) => ({ value: model.id, label: `${model.name}${model.credits ? ` · ${model.credits}` : ''}` })),
+  ];
   return agentKind === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
 }
 
@@ -65,6 +70,10 @@ export function normalizeModelSelection(
   value: string | undefined,
 ): string {
   if (isDefaultModel(value)) return DEFAULT_MODEL;
+  if (agentKind === 'codebuddy' && value && validCodeBuddyModelId(value)) {
+    rememberCodeBuddyModel(value);
+    return value;
+  }
   return supportedModels(agentKind).some((m) => m.value === value)
     ? (value as string)
     : DEFAULT_MODEL;

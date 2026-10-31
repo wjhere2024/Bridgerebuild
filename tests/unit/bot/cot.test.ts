@@ -185,6 +185,68 @@ describe('COT event mapping', () => {
     expect(publisher.degradedReason).toBe('field validation failed');
     expect(client.completed).toEqual([]);
   });
+
+  it('surfaces provider reconnect notices as bubble steps', async () => {
+    const client = new FakeCotClient();
+    const publisher = new CotPublisher({
+      client,
+      chatId: 'oc_chat',
+      originMessageId: 'om_origin',
+      runId: 'run-notice',
+      scope: 'oc_chat',
+      inputPreview: 'run',
+    });
+    await publisher.start();
+
+    await consumeCotEvents(iterate([
+      { type: 'notice', message: '连接失败，第 1/10 次重试' },
+      { type: 'notice', message: 'HTTP 401 authentication_failed，第 2/10 次重试' },
+      { type: 'text', delta: '已恢复输出' },
+      { type: 'done', terminationReason: 'normal' },
+    ]), publisher, { detail: 'brief' });
+
+    const stepStarts = client.events
+      .filter((event) => event.event_type === 'STEP_STARTED')
+      .map((event) => JSON.parse(event.content).stepName);
+    expect(stepStarts).toEqual([
+      '理解用户问题',
+      '🔌 模型服务商连接失败，正在重连…（连接失败，第 1/10 次重试）',
+      '🔌 模型服务商连接失败，正在重连…（HTTP 401 authentication_failed，第 2/10 次重试）',
+      '输出过程',
+    ]);
+    const noticeFinishes = client.events
+      .filter((event) => event.event_type === 'STEP_FINISHED')
+      .map((event) => JSON.parse(event.content).stepId)
+      .filter((stepId) => stepId.includes('step-notice'));
+    expect(noticeFinishes).toHaveLength(2);
+    expect(client.completed).toEqual(['done']);
+  });
+
+  it('closes the reconnect step before a terminal error ends the bubble', async () => {
+    const client = new FakeCotClient();
+    const publisher = new CotPublisher({
+      client,
+      chatId: 'oc_chat',
+      originMessageId: 'om_origin',
+      runId: 'run-notice-error',
+      scope: 'oc_chat',
+      inputPreview: 'run',
+    });
+    await publisher.start();
+
+    await consumeCotEvents(iterate([
+      { type: 'notice', message: '连接失败，第 1/10 次重试' },
+      { type: 'error', message: '模型服务商连接失败，已持续重连约 5 分钟仍未恢复，本次任务已终止。', terminationReason: 'failed' },
+    ]), publisher, { detail: 'brief' });
+
+    const noticeFinished = client.events.some(
+      (event) => event.event_type === 'STEP_FINISHED' && JSON.parse(event.content).stepId.includes('step-notice'),
+    );
+    expect(noticeFinished).toBe(true);
+    const runError = client.events.find((event) => event.event_type === 'RUN_ERROR');
+    expect(runError).toBeTruthy();
+    expect(client.completed).toEqual(['error']);
+  });
 });
 
 class FakeCotClient {

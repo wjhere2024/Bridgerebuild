@@ -1,9 +1,10 @@
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claudeCapability } from '../../../src/agent/capability';
+import { capabilityForProfile, claudeCapability } from '../../../src/agent/capability';
 import { ActiveRuns } from '../../../src/bot/active-runs';
-import { startRunFlow } from '../../../src/bot/run-flow';
+import { recordRunSessionEvent, startRunFlow } from '../../../src/bot/run-flow';
+import { SessionCatalog } from '../../../src/session/catalog';
 import { ProcessPool } from '../../../src/bot/process-pool';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema';
 import { RunExecutor } from '../../../src/runtime/run-executor';
@@ -19,6 +20,31 @@ afterEach(async () => {
 });
 
 describe('IM run flow', () => {
+  it('records and resumes a CodeBuddy session through the shared run flow', async () => {
+    const harness = await createHarness({ defaultWorkspace: true });
+    const profileConfig = { ...harness.profileConfig, agentKind: 'codebuddy' as const };
+    const capability = capabilityForProfile(profileConfig);
+    const sessionCatalog = new SessionCatalog(join(harness.tmp.profile, 'catalog.json'));
+    const input = {
+      scopeId: 'workbuddy-chat',
+      scope: { source: 'im' as const, chatId: 'workbuddy-chat', actorId: 'ou_user' },
+      prompt: 'hello', attachments: [], access: { ok: true as const, reason: 'allowed-user' as const },
+      capability, profileConfig, sessions: harness.sessions, workspaces: harness.workspaces,
+      sessionCatalog, executor: harness.executor, now: 1000,
+    };
+    const first = await startRunFlow(input);
+    if (!first.ok) throw new Error('expected first run');
+    recordRunSessionEvent({ scopeId: input.scopeId, sessions: harness.sessions, sessionCatalog, capability, policy: first.policy, event: { type: 'system', sessionId: 'workbuddy-session' } });
+    for await (const event of first.execution.subscribe()) { expect(event).toBeDefined(); }
+    const second = await startRunFlow(input);
+    if (!second.ok) throw new Error('expected resumed run');
+    expect(second.resumeFrom).toBe('workbuddy-session');
+    expect(harness.agent.runOptions[1]?.sessionId).toBe('workbuddy-session');
+    expect(sessionCatalog.activeFor({ scopeId: input.scopeId, agentId: 'codebuddy', cwdRealpath: first.cwdRealpath, policyFingerprint: first.policy.policyFingerprint })?.sessionId).toBe('workbuddy-session');
+    for await (const event of second.execution.subscribe()) { expect(event).toBeDefined(); }
+    await sessionCatalog.flush();
+  });
+
   it('rejects missing cwd without falling back to the user home', async () => {
     const h = await createHarness();
 

@@ -11,6 +11,8 @@ import { createDefaultProfileConfig, type RootConfig } from '../../../src/config
 import { runtimeProfileConfig, saveRootConfig } from '../../../src/config/profile-store';
 import { CodexModelStore } from '../../../src/model/registry';
 import { ClaudeModelStore } from '../../../src/model/claude-registry';
+import * as codeBuddyModels from '../../../src/agent/codebuddy/models';
+import { resolveModelArg } from '../../../src/agent/models';
 import { SessionStore } from '../../../src/session/store';
 import { WorkspaceStore } from '../../../src/workspace/store';
 import { FakeAgentAdapter } from '../../helpers/fake-agent';
@@ -18,6 +20,7 @@ import { createFakeChannel } from '../../helpers/fake-channel';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
@@ -90,6 +93,66 @@ async function harness(agentKind: 'codex' | 'claude' = 'codex') {
 }
 
 describe('restored /model commands and cards', () => {
+  it('keeps CodeBuddy model commands away from Codex credentials', async () => {
+    vi.spyOn(codeBuddyModels, 'getCodeBuddyCatalog').mockResolvedValue({ stale: false, catalog: { models: [{ id: 'auto', name: 'Auto', credits: '' }], currentModelId: 'auto', fetchedAt: new Date().toISOString() } });
+    const harnessResult = await harness();
+    const before = await readFile(join(harnessResult.codexDir, 'config.toml'), 'utf8');
+    harnessResult.ctx.controls.profileConfig = createDefaultProfileConfig({ agentKind: 'codebuddy', accounts: { app: { id: 'fixture-cb', secret: 'fixture-secret', tenant: 'feishu' } } });
+    await harnessResult.command('/model beta');
+    expect(harnessResult.visible()).toContain('可选列表');
+    expect(await readFile(join(harnessResult.codexDir, 'config.toml'), 'utf8')).toBe(before);
+  });
+
+  it('lists official WorkBuddy rates and persists a new model through text and card callbacks', async () => {
+    const catalog = { models: [{ id: 'auto', name: 'Auto', credits: '' }, { id: 'new-live-model', name: 'New model', credits: 'x0.08' }], currentModelId: 'auto', fetchedAt: new Date().toISOString() };
+    vi.spyOn(codeBuddyModels, 'getCodeBuddyCatalog').mockResolvedValue({ catalog, stale: false });
+    const result = await harness();
+    result.ctx.controls.profileConfig.agentKind = 'codebuddy';
+    const root = JSON.parse(await readFile(result.ctx.controls.configPath, 'utf8'));
+    root.profiles.codex.agentKind = 'codebuddy';
+    await writeFile(result.ctx.controls.configPath, JSON.stringify(root));
+    const credentials = await readFile(join(result.codexDir, 'auth.json'), 'utf8');
+    await result.command('/model');
+    expect(result.visible()).toContain('x0.08');
+    expect(result.visible()).toContain('不是每条消息固定');
+    result.ctx.sessions.set('oc_test', 'old-session', '/workspace');
+    await result.command('/model new-live-model');
+    expect(result.ctx.controls.profileConfig.preferences.model).toBe('new-live-model');
+    expect(resolveModelArg('codebuddy', 'new-live-model')).toBe('new-live-model');
+    expect(result.ctx.sessions.getRaw('oc_test')).toBeUndefined();
+    const persisted = JSON.parse(await readFile(result.ctx.controls.configPath, 'utf8'));
+    expect(persisted.profiles.codex.preferences.model).toBe('new-live-model');
+    await result.callback({ cmd: 'model.submit' }, { formValue: { model_name: 'auto' } });
+    expect(result.ctx.controls.profileConfig.preferences.model).toBe('auto');
+    await result.command('/model default');
+    expect(result.ctx.controls.profileConfig.preferences.model).toBeUndefined();
+    expect(await readFile(join(result.codexDir, 'auth.json'), 'utf8')).toBe(credentials);
+  });
+
+  it('displays stale WorkBuddy rates but refuses a model switch from stale data', async () => {
+    vi.spyOn(codeBuddyModels, 'getCodeBuddyCatalog').mockResolvedValue({ stale: true, catalog: { models: [{ id: 'auto', name: 'Auto', credits: '' }], currentModelId: 'auto', fetchedAt: new Date().toISOString() } });
+    const result = await harness();
+    result.ctx.controls.profileConfig.agentKind = 'codebuddy';
+    await result.command('/model refresh');
+    expect(result.visible()).toContain('上次成功缓存');
+    await result.command('/model auto');
+    expect(result.visible()).toContain('暂不切换');
+    expect(result.ctx.controls.profileConfig.preferences.model).toBe('gpt-5.6-sol');
+  });
+
+  it('does not query or change a WorkBuddy model while another run is reserved', async () => {
+    const query = vi.spyOn(codeBuddyModels, 'getCodeBuddyCatalog');
+    const result = await harness();
+    result.ctx.controls.profileConfig.agentKind = 'codebuddy';
+    const release = result.ctx.activeRuns.reserve('other-chat')!;
+    try {
+      await result.command('/model auto');
+      expect(result.visible()).toContain('当前有任务运行中');
+      expect(query).not.toHaveBeenCalled();
+      expect(result.ctx.controls.profileConfig.preferences.model).toBe('gpt-5.6-sol');
+    } finally { release(); }
+  });
+
   it.each(['codex', 'claude'] as const)('adds manual %s models from cards and text without switching the session', async (agentKind) => {
     const h = await harness(agentKind);
     h.ctx.sessions.set('oc_test', 'keep-session', '/workspace');

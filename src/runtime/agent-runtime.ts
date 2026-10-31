@@ -1,3 +1,5 @@
+import { CodeBuddyAdapter } from '../agent/codebuddy/adapter';
+import { loadCodeBuddyCatalog, rememberCodeBuddyModel } from '../agent/codebuddy/models';
 import { ClaudeAdapter } from '../agent/claude/adapter';
 import { CodexAdapter } from '../agent/codex/adapter';
 import { AgentPreflightError, type AgentAvailability } from '../agent/preflight';
@@ -49,6 +51,11 @@ export function createRuntimeAgent(
       larkChannel,
     });
   }
+  if (profileConfig.agentKind === 'codebuddy') {
+    loadCodeBuddyCatalog(appPaths.profileDir);
+    rememberCodeBuddyModel(profileConfig.preferences.model);
+    return new CodeBuddyAdapter({ larkChannel });
+  }
   return new ClaudeAdapter({ larkChannel });
 }
 
@@ -58,9 +65,9 @@ export async function checkRuntimeAgentAvailability(agent: AgentAdapter): Promis
   if (ok) return { ok: true };
   const diagnostic = {
     code: 'agent-binary-not-found' as const,
-    agentId: agent.id === 'codex' ? ('codex' as const) : ('claude' as const),
+    agentId: agent.id === 'codebuddy' ? ('codebuddy' as const) : agent.id === 'codex' ? ('codex' as const) : ('claude' as const),
     agentName: agent.displayName,
-    command: agent.id === 'codex' ? 'codex' : 'claude',
+    command: agent.id === 'codebuddy' ? 'codebuddy' : agent.id === 'codex' ? 'codex' : 'claude',
   };
   return { ok: false, diagnostic, error: new AgentPreflightError(diagnostic) };
 }

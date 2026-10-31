@@ -6,6 +6,7 @@ import { ModelError } from '../model/discovery';
 import { ClaudeModelStore } from '../model/claude-registry';
 import { CodexModelStore, modelsFromText, normalizeProviderName } from '../model/registry';
 import type { CommandContext } from './index';
+import { handleCodeBuddyModel } from './codebuddy-model';
 
 const USAGE = [
   '**模型管理**',
@@ -92,6 +93,9 @@ async function switchProvider(ctx: CommandContext, store: CodexModelStore, selec
 }
 
 export async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  if (ctx.controls.profileConfig.agentKind === 'codebuddy') {
+    return handleCodeBuddyModel(args, ctx);
+  }
   try {
     const isClaude = ctx.controls.profileConfig.agentKind === 'claude';
     const agentName = isClaude ? 'Claude' : 'Codex';

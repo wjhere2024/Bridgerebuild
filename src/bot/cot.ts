@@ -270,6 +270,10 @@ export async function consumeCotEvents(
   let textMessageOpen = false;
   let textMessageIndex = 0;
   let textMessageId: string | undefined;
+  let noticeStepOpen = false;
+  let noticeStepIndex = 0;
+  let noticeStepId = '';
+  let noticeStepName = '';
   const toolBrief = new Map<string, { name: string; input: unknown }>();
   const reasoningMessageId = `reasoning-${publisher.runId}`;
   const finalStepId = `step-process-${publisher.runId}`;
@@ -277,6 +281,19 @@ export async function consumeCotEvents(
   try {
     for await (const evt of events) {
       if (evt.type === 'system' || evt.type === 'usage') continue;
+      if (evt.type === 'notice') {
+        // Provider trouble (Claude api_retry / Codex reconnect): show each
+        // notice as its own step so the bubble reflects what is happening
+        // instead of sitting on the last progress step.
+        closeNoticeIfNeeded();
+        noticeStepIndex += 1;
+        noticeStepId = `step-notice-${publisher.runId}-${noticeStepIndex}`;
+        noticeStepName = truncateCot(`🔌 模型服务商连接失败，正在重连…（${evt.message}）`, 300);
+        noticeStepOpen = true;
+        publisher.enqueue('STEP_STARTED', { stepId: noticeStepId, stepName: noticeStepName });
+        continue;
+      }
+      closeNoticeIfNeeded();
       if (evt.type === 'thinking') {
         closeTextIfNeeded();
         if (!reasoningOpen) {
@@ -379,9 +396,11 @@ export async function consumeCotEvents(
     }
     closeReasoningIfNeeded();
     closeTextIfNeeded();
+    closeNoticeIfNeeded();
     await publisher.finish('done');
   } catch (err) {
     log.warn('cot', 'consume-failed', { err: err instanceof Error ? err.message : String(err) });
+    closeNoticeIfNeeded();
     await publisher.finish('error');
   }
 
@@ -397,6 +416,12 @@ export async function consumeCotEvents(
     publisher.enqueue('TEXT_MESSAGE_END', { messageId: textMessageId });
     textMessageOpen = false;
     textMessageId = undefined;
+  }
+
+  function closeNoticeIfNeeded(): void {
+    if (!noticeStepOpen) return;
+    noticeStepOpen = false;
+    publisher.enqueue('STEP_FINISHED', { stepId: noticeStepId, stepName: noticeStepName });
   }
 }
 

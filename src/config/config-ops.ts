@@ -60,6 +60,19 @@ export async function clearModelPreference(state: MutableProfileState): Promise<
   });
 }
 
+export async function setModelPreference(state: MutableProfileState, model: string): Promise<void> {
+  await withConfigFileLock(state.configPath, async () => {
+    const root = await loadRootConfig(state.configPath);
+    const profile = root?.profiles[state.profile];
+    if (!root || !profile) throw new Error('active profile missing');
+    if (model === 'default') delete profile.preferences.model;
+    else profile.preferences.model = model;
+    await saveRootConfig(root, state.configPath);
+    state.profileConfig = profile;
+    state.cfg = runtimeProfileConfig(root, state.profile);
+  });
+}
+
 /**
  * Apply the lark-cli identity policy (`strict-mode` + `default-as`) for a
  * profile. Pass the *effective* preset (team mode forces `bot-only` — see

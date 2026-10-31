@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
-import { claudeCapability, codexCapability } from '../agent/capability';
+import { capabilityForProfile } from '../agent/capability';
 import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
+import { getCodeBuddyCatalog } from '../agent/codebuddy/models';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
 import {
@@ -155,7 +156,7 @@ type Handler = (args: string, ctx: CommandContext) => Promise<void>;
 
 interface ResumeCandidate {
   scopeId: string;
-  agentId: 'claude' | 'codex';
+  agentId: 'claude' | 'codex' | 'codebuddy';
   cwdRealpath: string;
   policyFingerprint: string;
   sessionId?: string;
@@ -598,6 +599,19 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return;
   }
 
+  if (ctx.controls.profileConfig.agentKind === 'codebuddy') {
+    const identity = ctx.sessionCatalogIdentity;
+    const entry = identity ? ctx.sessionCatalog?.activeFor(identity) : undefined;
+    const entries = entry?.sessionId && identity ? [{
+      sessionId: issueResumeCandidate(identity, { sessionId: entry.sessionId }),
+      preview: 'WorkBuddy 当前会话',
+      relTime: formatRelTime(entry.updatedAt),
+      current: true,
+    }] : [];
+    await ctx.channel.send(ctx.msg.chatId, { card: resumeCard(cwd, entries) }, commandReplyOptions(ctx));
+    return;
+  }
+
   const sessions = await listClaudeResumeHistory(ctx, cwd, limit);
   const currentSession = ctx.sessions.getRaw(ctx.scope);
   const identity = ctx.sessionCatalogIdentity;
@@ -632,7 +646,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
       } else {
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'claude',
+          agentId: ctx.sessionCatalogIdentity.agentId,
           cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
           policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
           sessionId: resolved.sessionId!,
@@ -652,15 +666,14 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
       return;
     }
     ctx.activeRuns.interrupt(ctx.scope);
-    if (ctx.sessionCatalogIdentity.agentId === 'claude') {
-      ctx.sessions.set(ctx.scope, sessionId, ctx.sessionCatalogIdentity.cwdRealpath);
-    }
+    ctx.sessions.set(ctx.scope, sessionId, ctx.sessionCatalogIdentity.cwdRealpath);
     await reply(ctx, RESUME_APPLIED_REPLY);
     return;
   }
 
-  if (ctx.controls.profileConfig.agentKind === 'codex') {
-    await reply(ctx, '当前上下文没有可恢复的 Codex thread，请先在当前工作区完成一次运行。');
+  if (ctx.controls.profileConfig.agentKind !== 'claude') {
+    const kind = ctx.controls.profileConfig.agentKind === 'codex' ? 'Codex thread' : 'WorkBuddy 会话';
+    await reply(ctx, `当前上下文没有可恢复的 ${kind}，请先在当前工作区完成一次运行。`);
     return;
   }
 
@@ -705,7 +718,7 @@ function consumeResumeCandidate(
     candidate.agentId !== identity.agentId ||
     candidate.cwdRealpath !== identity.cwdRealpath ||
     candidate.policyFingerprint !== identity.policyFingerprint ||
-    (identity.agentId === 'claude' && !candidate.sessionId) ||
+    (identity.agentId !== 'codex' && !candidate.sessionId) ||
     (identity.agentId === 'codex' && !candidate.threadId)
   ) {
     return undefined;
@@ -768,7 +781,7 @@ function selectedResumeCwd(ctx: CommandContext): string | undefined {
 function runtimeAccessStatus(
   profileConfig: ProfileConfig,
 ): { label: string; value: string } {
-  if (profileConfig.agentKind === 'claude') {
+  if (profileConfig.agentKind !== 'codex') {
     return {
       label: 'permission',
       value: accessToClaudePermissionMode(
@@ -1134,9 +1147,7 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   doctorLastByOperator.set(rateKey, now);
 
   const capability =
-    ctx.controls.profileConfig.agentKind === 'codex'
-      ? codexCapability(ctx.controls.profileConfig)
-      : claudeCapability(ctx.controls.profileConfig);
+    capabilityForProfile(ctx.controls.profileConfig);
   const policy = evaluateRunPolicy({
     scope: {
       source: 'im',
@@ -1728,6 +1739,8 @@ async function handleConfig(args: string, ctx: CommandContext): Promise<void> {
 
 async function showConfigForm(ctx: CommandContext): Promise<void> {
   await Promise.all([
+    ...(ctx.controls.profileConfig.agentKind === 'codebuddy'
+      ? [getCodeBuddyCatalog(commandProfilePaths(ctx).profileDir).catch(() => undefined)] : []),
     ctx.controls.refreshOwner(ctx.channel).catch(() => {}),
     fetchKnownChats(ctx.channel)
       .then((chats) => {

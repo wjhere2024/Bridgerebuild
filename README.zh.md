@@ -6,6 +6,8 @@
 
 ## 本版优化
 
+- 新增试验性 WorkBuddy / CodeBuddy 适配器：流式回复、工具事件、登录错误、续聊与停止；精简 `/model` 卡片在下拉框展示官方积分倍率，支持刷新与独立模型偏好。
+- 补齐 Claude 服务商错误及不完整结果提示，避免错误被当作成功，并在重连停滞时给出说明。
 - Codex / Claude 的 `/model` 管理卡片：新增、编辑、切换和删除服务商，获取及刷新模型列表。
 - 记住每个服务商上次使用的模型；删除时独立选择目标并二次确认。
 - `/model add-model` 手动添加模型，刷新后继续保留。
@@ -19,6 +21,20 @@
 [English README](./README.md)
 
 上游产品的功能演示可以阅读[飞书文档](https://larkcommunity.feishu.cn/docx/OaRIdFIRFoLM3xxTmKwcetHqn5e)
+
+## WorkBuddy / CodeBuddy 试验性接入
+
+本版提供 `--agent codebuddy`；上游 npm 0.7.1 不包含该适配器。按本文源码构建步骤完成构建后，设置 `LARK_CHANNEL_CODEBUDDY_BIN` 指向已安装的CLI。未指定时运行适配器优先使用 Linux WorkBuddy 包内 `/opt/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy`，否则查找 `codebuddy`。首次引擎自动检测只搜索PATH或显式环境变量。
+
+完成官方账号授权后，执行 `node dist/codebuddy-probe.js` 验证两轮问答与会话续接。测试使用临时目录与plan权限，要求不调用工具；会实际调用模型，可能消耗额度。退出码为1或出现 `Authentication required` 表示探测未通过。
+
+执行 `node dist/cli.js profile create workbuddy --agent codebuddy --workspace /实际工作目录`，按提示创建独立飞书机器人，再执行 `node dist/cli.js run --profile workbuddy`。不要复用现有机器人的凭证启动竞争连接。部分WorkBuddy发行包不含交互TUI；如需使用内置HTTP登录界面，保持回环地址与密码认证，授权后关闭临时服务，不在仓库或聊天保存密码和令牌。
+
+在机器人聊天中发送 `/model`，从下拉框选择模型后点击“切换模型”。名称、ID与官方积分倍率只在下拉框列出，正文不重复完整清单；`/model refresh` 刷新、`/model status` 查看选择、`/model default` 跟随默认，也支持 `/model 模型ID`。切换只保存当前Bridge的偏好，并为当前聊天开启新会话，不修改Codex/Claude凭证或桌面全局默认。
+
+列表通过CLI的ACP元数据查询，缓存10分钟；失败时显示旧缓存并暂停具体模型切换。未提供倍率显示“倍率未提供”，明确的 `x0.00` 原样保留；倍率不是每条消息的固定扣分，实际消耗以官方账单为准。`node dist/codebuddy-probe.js --models` 仅查询模型元数据，不发送模型推理请求。
+
+`/resume` 仅展示本Bridge记录的当前WorkBuddy会话，不读取Claude原生历史。专家选择、技能市场与连接器管理卡片尚未接入；CLI可加载的能力需在服务器侧安装、授权并分别验证，不能假设桌面目录与登录自动同步。完整ACP对话、图片理解、跨桌面历史和桌面额度共用仍待单独验证。
 
 ## 主要功能
 

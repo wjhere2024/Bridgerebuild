@@ -16,24 +16,28 @@ import {
   type AgentRun,
   type AgentRunOptions,
 } from '../types';
-import { translateEvent } from './stream-json';
+import { ClaudeStreamJsonTranslator } from './stream-json';
+import { CodeBuddyStreamJsonTranslator } from '../codebuddy/stream-json';
 
 export interface ClaudeAdapterOptions {
   binary?: string;
+  protocol?: 'claude' | 'codebuddy';
   larkChannel?: LarkChannelEnvContext;
 }
 
 type ClaudeChild = SpawnedProcessByStdio<Writable, Readable, Readable>;
 
 export class ClaudeAdapter implements AgentAdapter {
-  readonly id = 'claude';
-  readonly displayName = 'Claude Code';
+  readonly id: 'claude' | 'codebuddy';
+  readonly displayName: string;
 
   private readonly binary: string;
   private readonly larkChannel: LarkChannelEnvContext | undefined;
   private botIdentity: AgentBotIdentity | undefined;
 
   constructor(opts: ClaudeAdapterOptions = {}) {
+    this.id = opts.protocol ?? 'claude';
+    this.displayName = this.id === 'codebuddy' ? 'WorkBuddy / CodeBuddy' : 'Claude Code';
     this.binary = opts.binary ?? 'claude';
     this.larkChannel = opts.larkChannel;
   }
@@ -48,8 +52,8 @@ export class ClaudeAdapter implements AgentAdapter {
 
   async checkAvailability(): Promise<AgentAvailability> {
     return checkAgentAvailability({
-      agentId: 'claude',
-      agentName: 'Claude Code',
+      agentId: this.id,
+      agentName: this.displayName,
       command: this.binary,
       binaryPath: this.binary,
     });
@@ -68,7 +72,8 @@ export class ClaudeAdapter implements AgentAdapter {
     // stream-json response. Pass the prompt via stdin and the appended system
     // prompt via a temp file (the same approach the Codex adapter uses) so no
     // special characters ever reach the shell.
-    const systemPromptFile = writeSystemPromptFile(buildBridgeSystemPrompt(this.botIdentity));
+    const systemPrompt = buildBridgeSystemPrompt(this.botIdentity);
+    const systemPromptFile = this.id === 'claude' ? writeSystemPromptFile(systemPrompt) : undefined;
 
     const args = [
       '-p',
@@ -77,8 +82,7 @@ export class ClaudeAdapter implements AgentAdapter {
       '--verbose',
       '--permission-mode',
       opts.permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
-      '--append-system-prompt-file',
-      systemPromptFile.path,
+      ...(systemPromptFile ? ['--append-system-prompt-file', systemPromptFile.path] : []),
     ];
     if (opts.sessionId) args.push('--resume', opts.sessionId);
     if (opts.model) args.push('--model', opts.model);
@@ -87,6 +91,7 @@ export class ClaudeAdapter implements AgentAdapter {
       cwd: opts.cwd,
       env: mergeProcessEnv(process.env, buildLarkChannelEnv(this.larkChannel)),
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: this.id === 'codebuddy' && process.platform !== 'win32',
     }) as ClaudeChild;
 
     log.info('agent', 'spawn', {
@@ -123,16 +128,23 @@ export class ClaudeAdapter implements AgentAdapter {
 
     child.on('error', (err) => {
       runtimeError = err;
-      systemPromptFile.cleanup();
+      systemPromptFile?.cleanup();
     });
     child.on('exit', (code, signal) => {
       log.info('agent', 'exit', { pid: child.pid ?? null, code, signal });
-      systemPromptFile.cleanup();
+      systemPromptFile?.cleanup();
     });
     child.stdin.on('error', (err) => {
       log.warn('agent', 'stdin-error', { message: err.message });
     });
-    child.stdin.end(opts.prompt, 'utf8');
+    child.stdin.end(this.id === 'codebuddy' ? `${systemPrompt}\n\n${opts.prompt}` : opts.prompt, 'utf8');
+    const signalChild = (signal: NodeJS.Signals): void => {
+      if (this.id === 'codebuddy' && process.platform !== 'win32' && child.pid) {
+        try { process.kill(-child.pid, signal); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+      } else { child.kill(signal); }
+    };
 
     // Default 5s if caller didn't specify — claude often has live
     // subprocesses (lark-cli waiting for OAuth, long Bash, etc.) and the
@@ -140,14 +152,27 @@ export class ClaudeAdapter implements AgentAdapter {
     // SIGKILL cascade. Callers (channel.ts, /doctor) override per-run with
     // a value derived from preferences.
     const stopGraceMs = opts.stopGraceMs ?? 5000;
+    const stopProcessGroup = this.id === 'codebuddy' && process.platform !== 'win32';
 
     return {
       runId: opts.runId,
-      events: createEventStream(child, stderrChunks, () => runtimeError),
+      events: createEventStream(child, stderrChunks, () => runtimeError, this.id),
       async stop() {
+        if (stopProcessGroup && child.pid) {
+          signalChild('SIGTERM');
+          const deadline = Date.now() + stopGraceMs;
+          while (true) {
+            try { process.kill(-child.pid, 0); } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+              throw error;
+            }
+            if (Date.now() >= deadline) { signalChild('SIGKILL'); return; }
+            await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          }
+        }
         if (child.exitCode !== null || child.signalCode !== null) return;
         log.info('agent', 'stop-sigterm', { pid: child.pid ?? null, graceMs: stopGraceMs });
-        child.kill('SIGTERM');
+        signalChild('SIGTERM');
         await new Promise<void>((resolve) => {
           const timer = setTimeout(() => {
             if (child.exitCode === null && child.signalCode === null) {
@@ -156,7 +181,7 @@ export class ClaudeAdapter implements AgentAdapter {
                 graceMs: stopGraceMs,
                 reason: 'grace-period-expired',
               });
-              child.kill('SIGKILL');
+              signalChild('SIGKILL');
             }
             resolve();
           }, stopGraceMs);
@@ -190,14 +215,16 @@ async function* createEventStream(
   child: ClaudeChild,
   stderrChunks: Buffer[],
   getError: () => Error | null,
+  protocol: 'claude' | 'codebuddy' = 'claude',
 ): AsyncGenerator<AgentEvent> {
+  const translator = protocol === 'codebuddy' ? new CodeBuddyStreamJsonTranslator() : new ClaudeStreamJsonTranslator();
   // If fork itself failed synchronously, child.pid is undefined. The 'error'
   // event (ENOENT etc.) fires in the next tick, so also check getError().
   if (!child.pid) {
     const err = getError();
     yield {
       type: 'error',
-      message: err ? `failed to spawn claude: ${err.message}` : 'spawn returned no pid',
+      message: err ? `failed to spawn ${protocol}: ${err.message}` : 'spawn returned no pid',
       terminationReason: 'failed',
     };
     return;
@@ -223,7 +250,7 @@ async function* createEventStream(
       } catch {
         continue;
       }
-      yield* translateEvent(parsed);
+      yield* translator.translate(parsed);
     }
   } finally {
     if (silentExitTimer) clearTimeout(silentExitTimer);
@@ -235,7 +262,7 @@ async function* createEventStream(
   if (earlyRuntimeError && child.exitCode === null && child.signalCode === null) {
     yield {
       type: 'error',
-      message: `claude runtime error: ${earlyRuntimeError.message}`,
+      message: `${protocol} runtime error: ${earlyRuntimeError.message}`,
       terminationReason: 'failed',
     };
     return;
@@ -254,17 +281,21 @@ async function* createEventStream(
 
   const runtimeError = getError();
   if (exitCode !== 0 && exitCode !== null) {
-    const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-    const detail = stderr ? `: ${stderr.slice(0, 500)}` : '';
+    if (!translator.terminalEmitted()) {
+      const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+      const detail = stderr ? `: ${stderr.slice(0, 500)}` : '';
+      yield {
+        type: 'error',
+        message: `${protocol} exited with code ${exitCode}${detail}`,
+        terminationReason: 'failed',
+      };
+    }
+  } else if (protocol === 'codebuddy' && !translator.terminalEmitted() && !runtimeError) {
+    yield { type: 'error', message: 'CodeBuddy 未返回完整结果，请检查登录状态或重试。', terminationReason: 'failed' };
+  } else if (runtimeError && !translator.terminalEmitted()) {
     yield {
       type: 'error',
-      message: `claude exited with code ${exitCode}${detail}`,
-      terminationReason: 'failed',
-    };
-  } else if (runtimeError) {
-    yield {
-      type: 'error',
-      message: `claude runtime error: ${runtimeError.message}`,
+      message: `${protocol} runtime error: ${runtimeError.message}`,
       terminationReason: 'failed',
     };
   }

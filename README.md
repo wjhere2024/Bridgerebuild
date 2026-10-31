@@ -6,6 +6,8 @@ The initial public snapshot includes local improvements through `29723bd`, based
 
 ## Improvements in this version
 
+- Experimental WorkBuddy / CodeBuddy adapter: streaming, tool events, authentication errors, session resume and cancellation. Compact `/model` cards show official credit multipliers in the dropdown, with refresh and profile-local selection. See [setup and limits](README.zh.md#workbuddy--codebuddy-试验性接入). Not included in upstream npm 0.7.1.
+- Surface Claude provider errors and incomplete results instead of reporting success; end stalled reconnection runs with a visible explanation.
 - `/model` cards for Codex and Claude: add, edit, select and delete providers; discover and refresh models.
 - Remember the last selected model for each provider; select a deletion target separately and confirm it before removal.
 - Add manual model names with `/model add-model` and preserve them after refresh.

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ClaudeAdapter } from '../../../src/agent/claude/adapter.js';
-import { translateEvent } from '../../../src/agent/claude/stream-json.js';
+import { ClaudeStreamJsonTranslator, translateEvent } from '../../../src/agent/claude/stream-json.js';
 import type { AgentEvent } from '../../../src/agent/types.js';
 
 describe('Claude stream-json translator', () => {
@@ -68,11 +68,15 @@ describe('Claude stream-json translator', () => {
     ]);
   });
 
-  it('does not report failed Claude API calls as successfully completed', () => {
+  it('reports failed Claude API calls as errors carrying the provider detail', () => {
     const events = [...translateEvent({ type: 'result', subtype: 'error_during_execution', is_error: true,
-      result: 'API response echoed fixture-secret', session_id: 'fixture-session' })];
+      api_error_status: 500, result: 'API Error: 500 Internal Server Error', session_id: 'fixture-session' })];
+    expect(events).toEqual([{ type: 'error', message: 'Claude 调用失败：API Error: 500 Internal Server Error', terminationReason: 'failed' }]);
+  });
+
+  it('keeps the generic hint when a failed result carries no detail', () => {
+    const events = [...translateEvent({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 'fixture-session' })];
     expect(events).toEqual([{ type: 'error', message: 'Claude 调用失败，请检查当前服务商状态、模型名称和认证。', terminationReason: 'failed' }]);
-    expect(JSON.stringify(events)).not.toContain('fixture-secret');
   });
 
   it('translates result usage before done', () => {
@@ -164,3 +168,56 @@ async function createFakeBinary(lines: string[], exitCode: number, stderr: strin
     },
   };
 }
+
+describe('Claude provider retry handling', () => {
+  it('translates api_retry events into reconnecting notices', () => {
+    const t = new ClaudeStreamJsonTranslator();
+    expect(
+      t.translate({ type: 'system', subtype: 'api_retry', attempt: 3, max_retries: 10, retry_delay_ms: 2225, error_status: 401, error: 'authentication_failed' }),
+    ).toEqual([{ type: 'notice', message: 'HTTP 401 authentication_failed，第 3/10 次重试' }]);
+    expect(t.terminalEmitted()).toBe(false);
+  });
+
+  it('falls back to a generic connection message for unknown retry errors', () => {
+    const t = new ClaudeStreamJsonTranslator();
+    expect(
+      t.translate({ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, error_status: null, error: 'unknown' }),
+    ).toEqual([{ type: 'notice', message: '连接失败，第 1/10 次重试' }]);
+  });
+
+  it('gives up with a provider error when retries continue without progress', () => {
+    let clock = 0;
+    const t = new ClaudeStreamJsonTranslator({ apiRetryGiveUpMs: 5 * 60_000, now: () => clock });
+    const retry = { type: 'system', subtype: 'api_retry', attempt: 8, max_retries: 10, error_status: 503, error: 'server_error' };
+
+    expect(t.translate(retry)).toEqual([{ type: 'notice', message: 'HTTP 503 server_error，第 8/10 次重试' }]);
+    clock = 2 * 60_000;
+    expect(t.translate(retry)).toHaveLength(1);
+    expect(t.terminalEmitted()).toBe(false);
+
+    clock = 5 * 60_000;
+    const events = t.translate(retry);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'error', terminationReason: 'failed' });
+    expect((events[0] as { message: string }).message).toContain('模型服务商连接失败');
+    expect((events[0] as { message: string }).message).toContain('5 分钟');
+    expect((events[0] as { message: string }).message).toContain('HTTP 503 server_error');
+    expect(t.terminalEmitted()).toBe(true);
+    expect(t.translate(retry)).toEqual([]);
+  });
+
+  it('restarts the retry stall clock whenever Claude makes progress', () => {
+    let clock = 0;
+    const t = new ClaudeStreamJsonTranslator({ apiRetryGiveUpMs: 5 * 60_000, now: () => clock });
+    const retry = { type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, error_status: null, error: 'unknown' };
+
+    expect(t.translate(retry)).toHaveLength(1);
+    clock = 4 * 60_000;
+    expect(t.translate({ type: 'assistant', message: { content: [{ type: 'text', text: 'back' }] } })).toEqual([
+      { type: 'text', delta: 'back' },
+    ]);
+    clock = 8 * 60_000;
+    expect(t.translate(retry)).toEqual([{ type: 'notice', message: '连接失败，第 1/10 次重试' }]);
+    expect(t.terminalEmitted()).toBe(false);
+  });
+});
