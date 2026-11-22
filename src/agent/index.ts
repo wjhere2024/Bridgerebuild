@@ -3,3 +3,4 @@ export { ClaudeAdapter } from './claude/adapter';
 export { CodexAdapter } from './codex/adapter';
 
 export { CodeBuddyAdapter } from './codebuddy/adapter';
+export { AntigravityAdapter } from './antigravity/adapter';

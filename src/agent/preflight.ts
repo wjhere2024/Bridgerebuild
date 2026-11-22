@@ -1,6 +1,6 @@
 import { spawnProcess } from '../platform/spawn';
 
-export type LocalAgentId = 'claude' | 'codex' | 'codebuddy';
+export type LocalAgentId = 'claude' | 'codex' | 'codebuddy' | 'antigravity';
 
 export type AgentPreflightErrorCode =
   | 'agent-binary-not-found'

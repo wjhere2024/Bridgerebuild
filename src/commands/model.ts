@@ -6,6 +6,7 @@ import { ModelError } from '../model/discovery';
 import { ClaudeModelStore } from '../model/claude-registry';
 import { CodexModelStore, modelsFromText, normalizeProviderName } from '../model/registry';
 import type { CommandContext } from './index';
+import { handleAntigravityModel } from './antigravity-model';
 import { handleCodeBuddyModel } from './codebuddy-model';
 
 const USAGE = [
@@ -93,6 +94,9 @@ async function switchProvider(ctx: CommandContext, store: CodexModelStore, selec
 }
 
 export async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  if (ctx.controls.profileConfig.agentKind === 'antigravity') {
+    return handleAntigravityModel(args, ctx);
+  }
   if (ctx.controls.profileConfig.agentKind === 'codebuddy') {
     return handleCodeBuddyModel(args, ctx);
   }

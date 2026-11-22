@@ -1,4 +1,5 @@
 import type { AgentKind } from '../config/profile-schema';
+import { antigravityModels, rememberAntigravityModel, validAntigravityModelId } from './antigravity/models';
 import { codeBuddyModels, rememberCodeBuddyModel, validCodeBuddyModelId } from './codebuddy/models';
 
 /**
@@ -44,8 +45,20 @@ const CODEX_MODELS: ModelOption[] = [
   { value: 'o3', label: 'o3' },
 ];
 
+/** Antigravity CLI models. The list is discovered live from `agy models`
+ * (per logged-in Google account) and cached in the profile directory;
+ * `agy` picks its default when no `--model` is passed. Until the first
+ * discovery runs, only the default option is offered. */
+function antigravityModelOptions(): ModelOption[] {
+  return [
+    { value: DEFAULT_MODEL, label: '跟随默认（不指定）' },
+    ...antigravityModels().map((model) => ({ value: model.id, label: `${model.name} [${model.id}]` })),
+  ];
+}
+
 /** The model picker options for a profile's agent kind. */
 export function supportedModels(agentKind: AgentKind): ModelOption[] {
+  if (agentKind === 'antigravity') return antigravityModelOptions();
   if (agentKind === 'codebuddy') return [
     { value: DEFAULT_MODEL, label: '跟随 WorkBuddy 默认模型' },
     ...codeBuddyModels().map((model) => ({ value: model.id, label: `${model.name}${model.credits ? ` · ${model.credits}` : ''}` })),
@@ -72,6 +85,10 @@ export function normalizeModelSelection(
   if (isDefaultModel(value)) return DEFAULT_MODEL;
   if (agentKind === 'codebuddy' && value && validCodeBuddyModelId(value)) {
     rememberCodeBuddyModel(value);
+    return value;
+  }
+  if (agentKind === 'antigravity' && value && validAntigravityModelId(value)) {
+    rememberAntigravityModel(value);
     return value;
   }
   return supportedModels(agentKind).some((m) => m.value === value)

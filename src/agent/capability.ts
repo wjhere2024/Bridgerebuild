@@ -2,8 +2,8 @@ import type { AccessMode } from '../config/permissions';
 import type { ProfileConfig } from '../config/profile-schema';
 import { BRIDGE_SYSTEM_PROMPT } from './bridge-system-prompt';
 
-export type AgentCapabilityId = 'claude' | 'codex' | 'codebuddy';
-export type AgentSessionKind = 'claude-session' | 'codex-thread' | 'codebuddy-session';
+export type AgentCapabilityId = 'claude' | 'codex' | 'codebuddy' | 'antigravity';
+export type AgentSessionKind = 'claude-session' | 'codex-thread' | 'codebuddy-session' | 'antigravity-session';
 export type PromptInjectionMode = 'append-system-prompt' | 'stdin-prefix';
 
 export interface AgentCapability {
@@ -45,6 +45,14 @@ export function capabilityForProfile(profile: ProfileConfig): AgentCapability {
     ...claudeCapability(profile),
     agentId: 'codebuddy',
     sessionKind: 'codebuddy-session',
+    promptInjection: 'stdin-prefix',
+    supportsNativeHistory: false,
+    callback: { marker: '__bridge_cb', legacyMarkers: [] },
+  };
+  if (profile.agentKind === 'antigravity') return {
+    ...claudeCapability(profile),
+    agentId: 'antigravity',
+    sessionKind: 'antigravity-session',
     promptInjection: 'stdin-prefix',
     supportsNativeHistory: false,
     callback: { marker: '__bridge_cb', legacyMarkers: [] },

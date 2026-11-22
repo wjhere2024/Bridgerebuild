@@ -156,7 +156,7 @@ type Handler = (args: string, ctx: CommandContext) => Promise<void>;
 
 interface ResumeCandidate {
   scopeId: string;
-  agentId: 'claude' | 'codex' | 'codebuddy';
+  agentId: 'claude' | 'codex' | 'codebuddy' | 'antigravity';
   cwdRealpath: string;
   policyFingerprint: string;
   sessionId?: string;

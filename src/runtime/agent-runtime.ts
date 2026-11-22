@@ -1,4 +1,6 @@
+import { AntigravityAdapter } from '../agent/antigravity/adapter';
 import { CodeBuddyAdapter } from '../agent/codebuddy/adapter';
+import { loadAntigravityCatalog, rememberAntigravityModel } from '../agent/antigravity/models';
 import { loadCodeBuddyCatalog, rememberCodeBuddyModel } from '../agent/codebuddy/models';
 import { ClaudeAdapter } from '../agent/claude/adapter';
 import { CodexAdapter } from '../agent/codex/adapter';
@@ -56,6 +58,23 @@ export function createRuntimeAgent(
     rememberCodeBuddyModel(profileConfig.preferences.model);
     return new CodeBuddyAdapter({ larkChannel });
   }
+  if (profileConfig.agentKind === 'antigravity') {
+    loadAntigravityCatalog(appPaths.profileDir);
+    rememberAntigravityModel(profileConfig.preferences.model);
+    const antigravity = profileConfig.antigravity;
+    if (!antigravity?.binaryPath) {
+      throw new Error('antigravity profile requires antigravity.binaryPath');
+    }
+    return new AntigravityAdapter({
+      binary: antigravity.binaryPath,
+      ...(antigravity.project ? { project: antigravity.project } : {}),
+      ...(antigravity.model ? { model: antigravity.model } : {}),
+      ...(antigravity.printTimeout ? { printTimeout: antigravity.printTimeout } : {}),
+      dangerouslySkipPermissions: antigravity.dangerouslySkipPermissions === true,
+      sandbox: antigravity.sandbox === true,
+      larkChannel,
+    });
+  }
   return new ClaudeAdapter({ larkChannel });
 }
 
@@ -65,9 +84,9 @@ export async function checkRuntimeAgentAvailability(agent: AgentAdapter): Promis
   if (ok) return { ok: true };
   const diagnostic = {
     code: 'agent-binary-not-found' as const,
-    agentId: agent.id === 'codebuddy' ? ('codebuddy' as const) : agent.id === 'codex' ? ('codex' as const) : ('claude' as const),
+    agentId: agent.id === 'codebuddy' ? ('codebuddy' as const) : agent.id === 'codex' ? ('codex' as const) : agent.id === 'antigravity' ? ('antigravity' as const) : ('claude' as const),
     agentName: agent.displayName,
-    command: agent.id === 'codebuddy' ? 'codebuddy' : agent.id === 'codex' ? 'codex' : 'claude',
+    command: agent.id === 'codebuddy' ? 'codebuddy' : agent.id === 'codex' ? 'codex' : agent.id === 'antigravity' ? 'agy' : 'claude',
   };
   return { ok: false, diagnostic, error: new AgentPreflightError(diagnostic) };
 }

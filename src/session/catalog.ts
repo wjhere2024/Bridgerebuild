@@ -214,7 +214,7 @@ function normalizeEntry(input: unknown): SessionCatalogEntry | undefined {
   if (
     typeof raw.key !== 'string' ||
     typeof raw.scopeId !== 'string' ||
-    (raw.agentId !== 'claude' && raw.agentId !== 'codex' && raw.agentId !== 'codebuddy') ||
+    (raw.agentId !== 'claude' && raw.agentId !== 'codex' && raw.agentId !== 'codebuddy' && raw.agentId !== 'antigravity') ||
     typeof raw.cwdRealpath !== 'string' ||
     typeof raw.policyFingerprint !== 'string' ||
     (raw.status !== 'active' && raw.status !== 'archived') ||
@@ -254,7 +254,7 @@ function isValidAgentEntry(entry: SessionCatalogEntry): boolean {
 function assertAgentIdentity(input: UpsertSessionCatalogInput): void {
   if (input.agentId !== 'codex') {
     if (!input.sessionId || input.threadId) {
-      throw new Error(`${input.agentId === 'claude' ? 'Claude' : 'CodeBuddy'} catalog entries require sessionId and must not include threadId`);
+      throw new Error(`${input.agentId === 'claude' ? 'Claude' : input.agentId === 'antigravity' ? 'Antigravity' : 'CodeBuddy'} catalog entries require sessionId and must not include threadId`);
     }
     return;
   }
