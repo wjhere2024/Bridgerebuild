@@ -1,0 +1,20 @@
+[Unit]
+Description=Lark Channel Bridge bot (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# NODE_PATH 换成你机器上 node 的实际路径（先跑 which node 查看）。
+# 不能直接写 lark-channel-bridge 可执行文件：它是 JS 脚本，靠 shebang 找 node，
+# 而 systemd 服务的默认 PATH 里往往没有 node 所在目录，会启动失败。
+ExecStart=NODE_PATH %h/.npm-global/bin/lark-channel-bridge run --profile %i
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.lark-channel/profiles/%i/logs/daemon/daemon-stdout.log
+StandardError=append:%h/.lark-channel/profiles/%i/logs/daemon/daemon-stderr.log
+Environment="PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="LARK_CHANNEL_HOME=%h/.lark-channel"
+
+[Install]
+WantedBy=default.target

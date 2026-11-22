@@ -1,0 +1,6 @@
+[Unit]
+Description=Bridge watchdog (check lark-channel-bridge profiles)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/bridge-watchdog.sh
